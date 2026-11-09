@@ -1,0 +1,37 @@
+# Surveillance de mes sites, depuis l'extérieur du serveur qui les héberge (ils sont tous sur le même VPS).
+# Toutes les 10 minutes : chaque site doit répondre 200 (redirections suivies, 3 essais espacés), et son
+# certificat doit être valable encore 14 jours. Un échec rend l'exécution rouge : GitHub envoie un e-mail.
+# Dépôt public : minutes Actions gratuites et illimitées. Aucune donnée secrète ici, seulement des adresses publiques.
+name: Sonde
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  site:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        site: [inwa.ma, triq.ma, autopilot.triq.ma, faq.ma, cc.faq.ma, skn.ma, retailivo.com]
+    steps:
+      - name: ${{ matrix.site }} répond et son certificat est valable
+        run: |
+          set -u
+          ok=""
+          for essai in 1 2 3; do
+            code=$(curl -sL -o /dev/null -w '%{http_code}' --max-time 20 "https://${{ matrix.site }}/" || echo 000)
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            echo "essai $essai : $code"; sleep 20
+          done
+          [ -n "$ok" ] || { echo "::error::${{ matrix.site }} ne répond pas (dernier code $code)"; exit 1; }
+          fin=$(echo | openssl s_client -servername ${{ matrix.site }} -connect ${{ matrix.site }}:443 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2)
+          jours=$(( ( $(date -d "$fin" +%s) - $(date +%s) ) / 86400 ))
+          echo "${{ matrix.site }} : 200, certificat valable encore $jours jours ($fin)"
+          [ "$jours" -ge 14 ] || { echo "::error::certificat de ${{ matrix.site }} : plus que $jours jours"; exit 1; }
